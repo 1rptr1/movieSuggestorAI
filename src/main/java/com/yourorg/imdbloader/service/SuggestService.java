@@ -29,7 +29,21 @@ public class SuggestService {
 
     public SuggestResponse startSession(StartRequest request) {
         String userId = UUID.randomUUID().toString();
-        profileRepo.save(new UserProfileEntity(userId, request.getQuery()));
+        
+        // Create initial preferences map with the query
+        Map<String, Object> initialPrefs = new HashMap<>();
+        initialPrefs.put("initialQuery", request.getQuery());
+        initialPrefs.put("preferredGenres", new ArrayList<>());
+        initialPrefs.put("preferredActors", new ArrayList<>());
+        
+        // Use custom method with JSONB casting to avoid PostgreSQL type mismatch
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            String prefsJson = mapper.writeValueAsString(initialPrefs);
+            profileRepo.saveWithJsonbCast(userId, prefsJson, java.time.LocalDateTime.now());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException("Error converting preferences to JSON", e);
+        }
 
         // initial recommendations from query
         List<Movie> recommendations = movieService.searchMovies(request.getQuery());
@@ -48,15 +62,17 @@ public class SuggestService {
         List<UserPreferenceEntity> prefs = prefRepo.findByUserId(userId);
 
         if (prefs.isEmpty()) {
-            // If no preferences yet, get user's initial query
+            // If no preferences yet, get user's initial query from preferences
             Optional<UserProfileEntity> profile = profileRepo.findById(userId);
-            if (profile.isPresent()) {
-                List<Movie> recommendations = movieService.searchMovies(profile.get().getInitialQuery());
-                return new SuggestResponse(userId, recommendations);
-            } else {
-                // Fallback to popular movies
-                return new SuggestResponse(userId, movieService.getAllMovies().subList(0, Math.min(10, movieService.getAllMovies().size())));
+            if (profile.isPresent() && profile.get().getPreferences() != null) {
+                String initialQuery = (String) profile.get().getPreferences().get("initialQuery");
+                if (initialQuery != null) {
+                    List<Movie> recommendations = movieService.searchMovies(initialQuery);
+                    return new SuggestResponse(userId, recommendations);
+                }
             }
+            // Fallback to popular movies
+            return new SuggestResponse(userId, movieService.getAllMovies().subList(0, Math.min(10, movieService.getAllMovies().size())));
         }
 
         // Enhanced recommender: analyze liked movies and suggest similar ones
@@ -110,5 +126,62 @@ public class SuggestService {
         score += (movie.getRating() / 10.0) * 0.3;
 
         return score;
+    }
+
+    // ============ USAGE EXAMPLE METHODS FOR JSONB PREFERENCES ============
+    
+    /**
+     * Example method showing how to add or update user preferences using JSONB
+     */
+    public void addOrUpdateUserPreferences(String userId, Map<String, Object> newPreferences) {
+        Optional<UserProfileEntity> existingProfile = profileRepo.findById(userId);
+        
+        if (existingProfile.isPresent()) {
+            UserProfileEntity profile = existingProfile.get();
+            Map<String, Object> currentPrefs = profile.getPreferences();
+            if (currentPrefs == null) {
+                currentPrefs = new HashMap<>();
+            }
+            
+            // Merge new preferences with existing ones
+            currentPrefs.putAll(newPreferences);
+            profile.setPreferences(currentPrefs);
+            profileRepo.save(profile);
+        } else {
+            // Create new profile with preferences
+            UserProfileEntity newProfile = new UserProfileEntity(userId, newPreferences);
+            profileRepo.save(newProfile);
+        }
+    }
+    
+    /**
+     * Example method showing how to update specific preference fields
+     */
+    public void updateUserGenrePreferences(String userId, List<String> preferredGenres) {
+        Optional<UserProfileEntity> profile = profileRepo.findById(userId);
+        if (profile.isPresent()) {
+            Map<String, Object> prefs = profile.get().getPreferences();
+            if (prefs == null) {
+                prefs = new HashMap<>();
+            }
+            prefs.put("preferredGenres", preferredGenres);
+            profile.get().setPreferences(prefs);
+            profileRepo.save(profile.get());
+        }
+    }
+    
+    /**
+     * Example method showing how to retrieve specific preferences
+     */
+    @SuppressWarnings("unchecked")
+    public List<String> getUserGenrePreferences(String userId) {
+        Optional<UserProfileEntity> profile = profileRepo.findById(userId);
+        if (profile.isPresent() && profile.get().getPreferences() != null) {
+            Object genres = profile.get().getPreferences().get("preferredGenres");
+            if (genres instanceof List) {
+                return (List<String>) genres;
+            }
+        }
+        return new ArrayList<>();
     }
 }
