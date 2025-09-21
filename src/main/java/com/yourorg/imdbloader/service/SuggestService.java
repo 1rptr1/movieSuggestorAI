@@ -7,6 +7,7 @@ import com.yourorg.imdbloader.model.Movie;
 import com.yourorg.imdbloader.repository.UserPreferenceRepository;
 import com.yourorg.imdbloader.repository.UserProfileRepository;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -18,13 +19,16 @@ public class SuggestService {
     private final UserProfileRepository profileRepo;
     private final UserPreferenceRepository prefRepo;
     private final MovieService movieService;
+    private final JdbcTemplate jdbcTemplate;
 
     public SuggestService(UserProfileRepository profileRepo,
                           UserPreferenceRepository prefRepo,
-                          MovieService movieService) {
+                          MovieService movieService,
+                          JdbcTemplate jdbcTemplate) {
         this.profileRepo = profileRepo;
         this.prefRepo = prefRepo;
         this.movieService = movieService;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     public SuggestResponse startSession(StartRequest request) {
@@ -36,16 +40,31 @@ public class SuggestService {
         initialPrefs.put("preferredGenres", new ArrayList<>());
         initialPrefs.put("preferredActors", new ArrayList<>());
         
-        // Use custom method with JSONB casting to avoid PostgreSQL type mismatch
+        // Save user profile with preferences using JdbcTemplate with JSONB casting
         try {
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             String prefsJson = mapper.writeValueAsString(initialPrefs);
-            profileRepo.saveWithJsonbCast(userId, prefsJson, java.time.LocalDateTime.now());
+            
+            // First ensure the table exists
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id VARCHAR(50) PRIMARY KEY,
+                    preferences JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """);
+            
+            // Insert with JSONB casting
+            jdbcTemplate.update(
+                "INSERT INTO user_profiles (user_id, preferences, created_at) VALUES (?, ?::jsonb, ?) " +
+                "ON CONFLICT (user_id) DO UPDATE SET preferences = ?::jsonb, created_at = ?",
+                userId, prefsJson, java.time.LocalDateTime.now(), prefsJson, java.time.LocalDateTime.now()
+            );
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Error converting preferences to JSON", e);
         }
 
-        // initial recommendations from query
+        // Get initial recommendations from query
         List<Movie> recommendations = movieService.searchMovies(request.getQuery());
 
         return new SuggestResponse(userId, recommendations);
