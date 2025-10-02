@@ -1,12 +1,13 @@
 package com.yourorg.imdbloader.config;
 
 import com.yourorg.imdbloader.service.ImdbLoaderService;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
+import javax.sql.DataSource;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -17,40 +18,41 @@ public class DatabaseInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseInitializer.class);
 
-    @PersistenceContext
-    private EntityManager entityManager;
-
     private final ImdbLoaderService imdbLoaderService;
+    private final DataSource dataSource;
 
-    public DatabaseInitializer(ImdbLoaderService imdbLoaderService) {
+    @Autowired
+    public DatabaseInitializer(ImdbLoaderService imdbLoaderService, DataSource dataSource) {
         this.imdbLoaderService = imdbLoaderService;
+        this.dataSource = dataSource;
     }
 
+    @Transactional
     public void init(Path imdbDataDir) throws SQLException {
         log.info("🚀 Initializing database with IMDB data from: {}", imdbDataDir);
-        
-        Connection conn = entityManager.unwrap(Connection.class);
 
-        // 1. Create all required tables
-        createTables(conn);
+        try (Connection conn = dataSource.getConnection()) {
+            // 1. Create all required tables
+            createTables(conn);
 
-        // 2. Check if data already exists
-        if (isDataAlreadyLoaded(conn)) {
-            log.info("✅ IMDB data already exists in database, skipping data loading");
-            return;
+            // 2. Check if data already exists
+            if (isDataAlreadyLoaded(conn)) {
+                log.info("✅ IMDB data already exists in database, skipping data loading");
+                return;
+            }
+
+            // 3. Load IMDB data
+            imdbLoaderService.loadImdbData(imdbDataDir, conn);
+
+            log.info("🎉 Database initialization completed successfully!");
         }
-
-        // 3. Load IMDB data
-        imdbLoaderService.loadImdbData(imdbDataDir, conn);
-        
-        log.info("🎉 Database initialization completed successfully!");
     }
 
     private void createTables(Connection conn) throws SQLException {
         log.info("📋 Creating database tables...");
-        
+
         try (Statement stmt = conn.createStatement()) {
-            
+
             // Create user_profiles table (for movie suggestor)
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS user_profiles (
@@ -59,7 +61,7 @@ public class DatabaseInitializer {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """);
-            
+
             // Create user_preferences table (for tracking liked movies)
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS user_preferences (
@@ -147,7 +149,7 @@ public class DatabaseInitializer {
             if (rs.next()) {
                 int count = rs.getInt(1);
                 log.info("Found {} records in title_basics table", count);
-                return count > 0;
+                return count > 100;
             }
         } catch (SQLException e) {
             log.warn("Could not check existing data, assuming empty database: {}", e.getMessage());

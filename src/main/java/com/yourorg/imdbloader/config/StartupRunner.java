@@ -52,6 +52,7 @@ public class StartupRunner implements CommandLineRunner {
             log.info("   - title.basics.tsv");
             log.info("   - title.principals.tsv");
             log.info("   - title.akas.tsv");
+            log.info("   - title.crew.tsv");
             return;
         }
 
@@ -63,7 +64,7 @@ public class StartupRunner implements CommandLineRunner {
         log.info("📁 Using IMDB data directory: {}", imdbDir);
         
         // Check for required files
-        String[] requiredFiles = {"name.basics.tsv", "title.basics.tsv", "title.principals.tsv", "title.akas.tsv"};
+        String[] requiredFiles = {"name.basics.tsv", "title.basics.tsv", "title.principals.tsv", "title.akas.tsv", "title.crew.tsv"};
         boolean allFilesExist = true;
         
         for (String fileName : requiredFiles) {
